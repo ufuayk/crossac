@@ -1,13 +1,12 @@
 # crossac
 
-A lightweight, cross-platform on-screen crosshair. Named after the town of
-**crossac** in western France — just like Apple names its OS releases after
-places, we found a fitting one for a crosshair app. Vector-rendered, fully
-customisable, always on top — even over fullscreen games.
+A lightweight, cross-platform on-screen crosshair overlay. Vector-rendered, fully customisable, and always on top — even over fullscreen games.
+
+<img src="screenshot.png" width="50%">
 
 | Windows | macOS | Linux (X11) |
 | :-----: | :---: | :---------: |
-| ✅ | ✅ | ✅ |
+| 🟨 |🟩 | 🟩 |
 
 > **macOS / Windows:** the overlay is raised to the highest native window level
 > and marked click-through, so it floats above fullscreen (borderless) games.
@@ -46,6 +45,24 @@ customisable, always on top — even over fullscreen games.
 - PySide6 (`pip install PySide6`)
 
 ## Installation & Run
+
+### macOS / Linux — quick install (recommended)
+
+This installs crossac into an isolated virtual environment (your system Python
+is never touched), generates an app icon, and adds a proper app entry —
+`Crossac.app` in `~/Applications` on macOS, or a menu entry on Linux.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ufuayk/crossac/main/install.sh | bash
+```
+
+To uninstall:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ufuayk/crossac/main/uninstall.sh | bash
+```
+
+### Manual install (all platforms)
 
 ```bash
 python3 -m venv .venv
