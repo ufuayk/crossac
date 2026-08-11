@@ -234,7 +234,7 @@ if [[ "$OS" == "Darwin" ]]; then
     <key>CFBundleDisplayName</key>
     <string>${APP_NAME}</string>
     <key>CFBundleIdentifier</key>
-    <string>com.ufuayk.crossac</string>
+    <string>com.crossac.crossac</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
