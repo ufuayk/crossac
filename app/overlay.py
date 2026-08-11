@@ -20,12 +20,18 @@ class OverlayWindow(QWidget):
         self._native_timer.setInterval(1500)
         self._native_timer.timeout.connect(self._apply_native)
 
-        self.setWindowFlags(
+        flags = (
             Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.WindowTransparentForInput
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
+        if sys.platform == "darwin":
+            # NSPanel required for fullscreen space participation
+            flags |= Qt.WindowType.Tool
+        else:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+
+        self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
