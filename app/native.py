@@ -7,12 +7,16 @@ import sys
 def apply_topmost(widget) -> None:
     try:
         from PySide6.QtGui import QGuiApplication
-        if QGuiApplication.platformName().lower() == "offscreen":
+        platform = QGuiApplication.platformName().lower()
+        if platform == "offscreen":
             return
         if sys.platform == "win32":
             _apply_windows(int(widget.winId()))
         elif sys.platform == "darwin":
             _apply_macos(int(widget.winId()))
+        elif sys.platform == "linux":
+            if platform == "xcb":
+                _apply_linux_x11(int(widget.winId()))
     except Exception:
         pass
 
@@ -99,3 +103,61 @@ def _apply_macos(win_id: int) -> None:
     _msg_b(ns_window, "setHidesOnDeactivate:", False)
     _msg_b(ns_window, "setCanHide:", False)
     _msg_b(ns_window, "setIgnoresMouseEvents:", True)
+
+
+def _apply_linux_x11(hwnd: int) -> None:
+    try:
+        from ctypes import c_void_p, c_ulong, c_int, c_char_p, c_uint32, Structure, byref
+
+        x11 = ctypes.CDLL("libX11.so.6")
+
+        x11.XOpenDisplay.restype = c_void_p
+        x11.XOpenDisplay.argtypes = [c_void_p]
+        dpy = x11.XOpenDisplay(None)
+        if not dpy:
+            return
+
+        x11.XInternAtom.restype = c_ulong
+        x11.XInternAtom.argtypes = [c_void_p, c_char_p, c_int]
+        wm_state = x11.XInternAtom(dpy, b"_NET_WM_STATE", False)
+        wm_above = x11.XInternAtom(dpy, b"_NET_WM_STATE_ABOVE", False)
+
+        class XClientMessageEvent(Structure):
+            _fields_ = [
+                ("type", c_int),
+                ("serial", c_ulong),
+                ("send_event", c_int),
+                ("display", c_void_p),
+                ("window", c_ulong),
+                ("message_type", c_ulong),
+                ("format", c_int),
+                ("data", c_uint32 * 5),
+            ]
+
+        event = XClientMessageEvent()
+        event.type = 33  # ClientMessage
+        event.serial = 0
+        event.send_event = True
+        event.display = dpy
+        event.window = hwnd
+        event.message_type = wm_state
+        event.format = 32
+        event.data[0] = 1  # _NET_WM_STATE_ADD
+        event.data[1] = wm_above
+        event.data[2] = 0
+        event.data[3] = 0
+        event.data[4] = 0
+
+        x11.XDefaultRootWindow.restype = c_ulong
+        x11.XDefaultRootWindow.argtypes = [c_void_p]
+        root = x11.XDefaultRootWindow(dpy)
+
+        x11.XSendEvent.restype = c_int
+        x11.XSendEvent.argtypes = [c_void_p, c_ulong, c_int, c_ulong, c_void_p]
+
+        mask = c_ulong(1 << 19)  # SubstructureNotifyMask
+        x11.XSendEvent(dpy, root, False, mask, byref(event))
+        x11.XFlush(dpy)
+        x11.XCloseDisplay(dpy)
+    except Exception:
+        pass
