@@ -1,11 +1,3 @@
-"""The crosshair overlay window.
-
-A frameless, translucent, click-through window that is always kept on top.
-On each settings change the crosshair is re-rendered (vector drawing) and the
-window is re-centred on the chosen monitor, so the crosshair always sits dead
-centre of the screen - fullscreen or not.
-"""
-
 from __future__ import annotations
 
 import sys
@@ -42,12 +34,10 @@ class OverlayWindow(QWidget):
         self._store.changed.connect(self.refresh)
         self.refresh()
 
-    # ------------------------------------------------------------- lifecycle
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._apply_native()
         if sys.platform == "darwin":
-            # macOS can drop the window level after space/fullscreen switches.
             self._native_timer.start()
         else:
             self._native_timer.stop()
@@ -64,7 +54,6 @@ class OverlayWindow(QWidget):
         if self.isVisible() and self.windowHandle() is not None:
             apply_topmost(self)
 
-    # ------------------------------------------------------------- rendering
     def refresh(self) -> None:
         settings = self._store.get()
         screen = self._target_screen()
@@ -96,15 +85,12 @@ class OverlayWindow(QWidget):
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        # Fully clear the previous frame first, otherwise a translucent window
-        # keeps the old crosshair's pixels and leaves a ghost trail on screen.
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
         painter.fillRect(self.rect(), Qt.transparent)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         painter.drawPixmap(0, 0, self._pixmap)
         painter.end()
 
-    # ------------------------------------------------------------ visibility
     def toggle(self) -> None:
         if self.isVisible():
             self.hide()

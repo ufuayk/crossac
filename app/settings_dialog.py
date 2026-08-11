@@ -1,22 +1,14 @@
-"""Settings dialog with live preview, detailed customisation and the
-community crosshair library.
-
-Every control writes straight into the shared :class:`SettingsStore`, which
-re-emits ``changed`` so the overlay and the preview update instantly. The whole
-UI is translated on the fly when the language is changed.
-"""
-
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QColor, QIcon, QPainter
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QRadialGradient
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
-    QColorDialog,
     QComboBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -36,12 +28,13 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 
+from .colorbutton import ColorButton
 from .community import CommunityWorker, export_settings, import_file
 from .config import ARMS_LETTERS, CAPS, CrosshairSettings, SettingsStore
 from .i18n import get_i18n, tr
-from .renderer import STYLES, render_pixmap
+from .renderer import STYLES, render_icon, render_pixmap
+from .theme import ACCENT, ACCENT_RGB
 
-# (settings key, translation key, min, max) - in display order
 _APPEARANCE_SLIDERS = (
     ("size", "setting.size", 2, 200),
     ("size_v", "setting.size_v", 2, 200),
@@ -50,8 +43,8 @@ _APPEARANCE_SLIDERS = (
     ("thickness", "setting.thickness", 1, 40),
     ("rotation", "setting.rotation", 0, 360),
     ("opacity", "setting.opacity", 10, 100),
-    ("offset_x", "setting.offset_x", -300, 300),
-    ("offset_y", "setting.offset_y", -300, 300),
+    ("offset_x", "setting.offset_x", -400, 400),
+    ("offset_y", "setting.offset_y", -400, 400),
 )
 
 _ARMS_LABELS = (
@@ -63,17 +56,14 @@ _ARMS_LABELS = (
 
 
 class CrosshairPreview(QWidget):
-    """Renders the crosshair scaled to fit, updating live with the settings.
-
-    Rendered at dpr 1.0 and pre-scaled, so there is no high-DPI pixmap /
-    source-rectangle confusion that could clip or ghost the preview.
-    """
+    _CHECK_LIGHT = QColor("#2B3039")
+    _CHECK_DARK = QColor("#242830")
 
     def __init__(self, store: SettingsStore, parent=None):
         super().__init__(parent)
         self._store = store
         self.setObjectName("previewPanel")
-        self.setMinimumSize(320, 200)
+        self.setMinimumHeight(220)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._pixmap = render_pixmap(store.get(), 1.0)
         self._store.changed.connect(self._on_changed)
@@ -83,23 +73,42 @@ class CrosshairPreview(QWidget):
         self.update()
 
     def paintEvent(self, event) -> None:
-        if self._pixmap.isNull():
-            return
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        scale = min(
-            self.width() / self._pixmap.width(),
-            self.height() / self._pixmap.height(),
-            1.8,
-        )
-        w = max(int(self._pixmap.width() * scale), 1)
-        h = max(int(self._pixmap.height() * scale), 1)
-        scaled = self._pixmap.scaled(
-            w, h, Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation)
-        x = (self.width() - scaled.width()) // 2
-        y = (self.height() - scaled.height()) // 2
-        painter.drawPixmap(x, y, scaled)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect().adjusted(2, 2, -2, -2)
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, 13, 13)
+        painter.setClipPath(clip)
+
+        tile = 14
+        for y in range(rect.top(), rect.bottom(), tile):
+            for x in range(rect.left(), rect.right(), tile):
+                even = ((x // tile) + (y // tile)) % 2 == 0
+                painter.fillRect(x, y, tile, tile,
+                                 self._CHECK_LIGHT if even else self._CHECK_DARK)
+
+        if not self._pixmap.isNull():
+            scale = min(
+                self.width() / self._pixmap.width(),
+                self.height() / self._pixmap.height(),
+                1.9,
+            )
+            w = max(int(self._pixmap.width() * scale), 1)
+            h = max(int(self._pixmap.height() * scale), 1)
+            scaled = self._pixmap.scaled(
+                w, h, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            x = rect.x() + (rect.width() - scaled.width()) // 2
+            y = rect.y() + (rect.height() - scaled.height()) // 2
+
+            glow = QRadialGradient(rect.center(), max(rect.width(), rect.height()) * 0.5)
+            r, g, b = ACCENT_RGB
+            glow.setColorAt(0.0, QColor(r, g, b, 24))
+            glow.setColorAt(1.0, QColor(r, g, b, 0))
+            painter.fillRect(rect, glow)
+
+            painter.drawPixmap(x, y, scaled)
         painter.end()
 
 
@@ -131,18 +140,38 @@ class SettingsDialog(QDialog):
         self._sync_controls()
         self._update_shape_specific()
 
-    # ------------------------------------------------------------------- UI
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 12)
         root.setSpacing(10)
 
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(14)
+
+        self._brand_icon = QLabel()
+        brand = CrosshairSettings(style="cross", color=ACCENT, size=16,
+                                  thickness=3, gap=3, center_dot=True, dot_size=4)
+        self._brand_icon.setPixmap(render_icon(brand, 40))
+        self._brand_icon.setFixedSize(40, 40)
+        header_layout.addWidget(self._brand_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        title_block = QVBoxLayout()
+        title_block.setSpacing(2)
         self._title = QLabel("Crossac")
-        self._title.setStyleSheet("font-size: 20px; font-weight: 800; letter-spacing: 1px; color: #00ff88;")
+        self._title.setObjectName("appTitle")
         self._subtitle = QLabel()
-        self._subtitle.setObjectName("hintLabel")
-        root.addWidget(self._title)
-        root.addWidget(self._subtitle)
+        self._subtitle.setObjectName("appSubtitle")
+        title_block.addWidget(self._title)
+        title_block.addWidget(self._subtitle)
+        header_layout.addLayout(title_block, 1)
+        root.addWidget(header)
+
+        line = QFrame()
+        line.setObjectName("headerLine")
+        line.setFixedHeight(2)
+        root.addWidget(line)
 
         tabs = QTabWidget()
         tabs.addTab(self._build_crosshair_tab(), "")
@@ -175,14 +204,16 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
-        layout.addWidget(self._build_style_row())
         self._preview = CrosshairPreview(self._store)
-        layout.addWidget(self._preview, 1)
+        layout.addWidget(self._preview, 2)
+
+        layout.addWidget(self._build_style_row())
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         body = QWidget()
+        body.setObjectName("scrollBody")
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 6, 0)
         body_layout.setSpacing(10)
@@ -196,39 +227,42 @@ class SettingsDialog(QDialog):
         body_layout.addWidget(self._build_display_box())
         body_layout.addStretch(1)
         scroll.setWidget(body)
-        layout.addWidget(scroll, 3)
+        layout.addWidget(scroll, 5)
         return tab
 
     def _build_style_row(self) -> QWidget:
         row = QWidget()
+        row.setObjectName("styleBar")
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
         self._style_group = QButtonGroup(self)
         self._style_group.setExclusive(True)
         for style in STYLES:
             btn = QToolButton()
             btn.setObjectName("styleButton")
             btn.setCheckable(True)
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
             btn.setIcon(self._style_icon(style))
-            btn.setIconSize(QSize(38, 38))
-            btn.setMinimumSize(72, 54)
+            btn.setIconSize(QSize(30, 30))
+            btn.setText(tr(f"style.{style}"))
+            btn.setMinimumSize(96, 64)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda checked=False, s=style: self._store.set(style=s))
             self._style_group.addButton(btn)
             self._style_buttons.append(btn)
-            layout.addWidget(btn)
+            layout.addWidget(btn, 1)
         layout.addStretch(1)
         return row
 
     def _style_icon(self, style: str) -> QIcon:
         s = CrosshairSettings(style=style, size=14, thickness=3, gap=4,
-                              color="#00ff88", center_dot=False, sides=16)
+                              color=ACCENT, center_dot=False, sides=16)
         pixmap = render_pixmap(s, 1.0)
         scaled = pixmap.scaled(44, 44, Qt.AspectRatioMode.KeepAspectRatio,
                                Qt.TransformationMode.SmoothTransformation)
         return QIcon(scaled)
 
-    # ------------------------------------------------------------- boxes
     def _build_appearance_box(self) -> QGroupBox:
         box = QGroupBox()
         grid = QGridLayout(box)
@@ -274,10 +308,7 @@ class SettingsDialog(QDialog):
         self._dot_check = QCheckBox()
         self._dot_check.toggled.connect(lambda v: self._store.set(center_dot=v))
         grid.addWidget(self._dot_check, 0, 0, 1, 2)
-        self._dot_color_btn = QPushButton()
-        self._dot_color_btn.setObjectName("colorButton")
-        self._dot_color_btn.setMaximumWidth(70)
-        self._dot_color_btn.clicked.connect(self._pick_dot_color)
+        self._dot_color_btn = ColorButton(self._store, "dot_color")
         grid.addWidget(self._dot_color_btn, 0, 2)
         self._add_slider(grid, 1, "dot_size", 1, 80)
         self._reticle_box = box
@@ -290,10 +321,7 @@ class SettingsDialog(QDialog):
         self._outline_check = QCheckBox()
         self._outline_check.toggled.connect(lambda v: self._store.set(outline=v))
         grid.addWidget(self._outline_check, 0, 0, 1, 2)
-        self._outline_color_btn = QPushButton()
-        self._outline_color_btn.setObjectName("colorButton")
-        self._outline_color_btn.setMaximumWidth(70)
-        self._outline_color_btn.clicked.connect(self._pick_outline_color)
+        self._outline_color_btn = ColorButton(self._store, "outline_color")
         grid.addWidget(self._outline_color_btn, 0, 2)
         self._add_slider(grid, 1, "outline_thickness", 1, 20)
         self._outline_box = box
@@ -324,7 +352,6 @@ class SettingsDialog(QDialog):
         self._arms_box.setVisible(style == "cross")
         self._sides_box.setVisible(style == "circle")
 
-    # ----------------------------------------------------------- community
     def _build_community_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -373,13 +400,22 @@ class SettingsDialog(QDialog):
             self._worker = None
 
     def closeEvent(self, event) -> None:
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.wait(5000)
-            self._worker = None
+        self.request_worker_stop()
+        self.wait_for_worker(3000)
         super().closeEvent(event)
+
+    def request_worker_stop(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.requestInterruption()
+
+    def wait_for_worker(self, timeout_ms: int) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.wait(timeout_ms)
 
     def _on_community_done(self, result: dict) -> None:
         self._refresh_btn.setEnabled(True)
+        if result.get("status") == "cancelled":
+            return
         items = result.get("items", [])
         if not items:
             self._set_community_status(tr("community.empty"))
@@ -419,7 +455,6 @@ class SettingsDialog(QDialog):
         self._store.apply(settings)
         QMessageBox.information(self, tr("dialog.title"), tr("community.imported"))
 
-    # -------------------------------------------------------------- export
     def _on_export(self) -> None:
         settings = self._store.get()
         name, ok = QInputDialog.getText(self, tr("button.export"), tr("community.name"))
@@ -437,7 +472,6 @@ class SettingsDialog(QDialog):
         else:
             QMessageBox.warning(self, tr("dialog.title"), tr("community.export_error"))
 
-    # -------------------------------------------------------------- controls
     def _add_slider(self, grid: QGridLayout, row: int, key: str, low: int, high: int) -> None:
         label = QLabel()
         slider = QSlider(Qt.Orientation.Horizontal)
@@ -461,25 +495,7 @@ class SettingsDialog(QDialog):
 
     def _add_color(self, grid: QGridLayout, row: int, key: str) -> None:
         label = QLabel()
-        btn = QPushButton()
-        btn.setObjectName("colorButton")
-        btn.setMaximumWidth(70)
-
-        def on_click() -> None:
-            current = QColor(self._store.get().__getattribute__(key))
-            color = QColorDialog.getColor(current, self, tr("setting.color"))
-            if color.isValid():
-                self._store.set(**{key: color.name().upper()})
-
-        def paint_swatch() -> None:
-            btn.setStyleSheet(
-                f"background-color: {self._store.get().__getattribute__(key)};"
-                f"border: 1px solid #3a3f4a;"
-            )
-
-        btn.clicked.connect(on_click)
-        self._store.changed.connect(paint_swatch)
-        paint_swatch()
+        btn = ColorButton(self._store, key)
         grid.addWidget(label, row, 0)
         grid.addWidget(btn, row, 1)
         self._color_buttons[key] = btn
@@ -496,18 +512,6 @@ class SettingsDialog(QDialog):
         grid.addWidget(combo, row, 1)
         self._cap_combo = combo
         self._control_labels["cap"] = label
-
-    def _pick_outline_color(self) -> None:
-        current = QColor(self._store.get().outline_color)
-        color = QColorDialog.getColor(current, self, tr("setting.outline_color"))
-        if color.isValid():
-            self._store.set(outline_color=color.name().upper())
-
-    def _pick_dot_color(self) -> None:
-        current = QColor(self._store.get().dot_color)
-        color = QColorDialog.getColor(current, self, tr("setting.dot_color"))
-        if color.isValid():
-            self._store.set(dot_color=color.name().upper())
 
     def _populate_monitors(self) -> None:
         self._monitor_combo.blockSignals(True)
@@ -543,7 +547,6 @@ class SettingsDialog(QDialog):
         self._store.set(language=code)
         self._retranslate()
 
-    # ------------------------------------------------------------ translation
     def _retranslate(self) -> None:
         self.setWindowTitle(tr("dialog.title"))
         self._subtitle.setText(tr("app.subtitle"))
@@ -574,7 +577,12 @@ class SettingsDialog(QDialog):
             label.setText(tr(key_map.get(key, key)))
 
         for btn, style in zip(self._style_buttons, STYLES):
+            btn.setText(tr(f"style.{style}"))
             btn.setToolTip(tr(f"style.{style}"))
+
+        self._color_buttons.get("color").retranslate()
+        self._dot_color_btn.retranslate()
+        self._outline_color_btn.retranslate()
 
         self._appearance_box.setTitle(tr("category.appearance"))
         self._arms_box.setTitle(tr("setting.arms"))
@@ -601,14 +609,12 @@ class SettingsDialog(QDialog):
         self._set_community_status(tr("community.loading"))
         self._populate_monitors()
 
-        # keep the selected language
         self._language_combo.blockSignals(True)
         current = self._store.get().language
         index = self._language_combo.findData(current)
         self._language_combo.setCurrentIndex(index if index >= 0 else 0)
         self._language_combo.blockSignals(False)
 
-    # ------------------------------------------------------------------ sync
     def _sync_controls(self) -> None:
         s = self._store.get()
         for key, slider in self._sliders.items():
@@ -616,22 +622,12 @@ class SettingsDialog(QDialog):
             slider.setValue(getattr(s, key))
             slider.blockSignals(False)
             self._value_labels[key].setText(str(getattr(s, key)))
-        for key, btn in self._color_buttons.items():
-            btn.setStyleSheet(
-                f"background-color: {getattr(s, key)}; border: 1px solid #3a3f4a;"
-            )
         self._dot_check.blockSignals(True)
         self._dot_check.setChecked(s.center_dot)
         self._dot_check.blockSignals(False)
         self._outline_check.blockSignals(True)
         self._outline_check.setChecked(s.outline)
         self._outline_check.blockSignals(False)
-        self._dot_color_btn.setStyleSheet(
-            f"background-color: {s.dot_color}; border: 1px solid #3a3f4a;"
-        )
-        self._outline_color_btn.setStyleSheet(
-            f"background-color: {s.outline_color}; border: 1px solid #3a3f4a;"
-        )
         for letter, _ in _ARMS_LABELS:
             self._arm_checks[letter].blockSignals(True)
             self._arm_checks[letter].setChecked(letter in s.arms)

@@ -1,19 +1,3 @@
-"""Vector crosshair renderer.
-
-Crosshairs are drawn at runtime with QPainter instead of loading static image
-files. Only three base styles are shipped (cross, circle, dot), but the shape
-parameters let anyone rebuild fancier sights by hand:
-
-* **cross**  - the ``arms`` setting hides individual arms (drop the top arm and
-  it becomes a T).
-* **circle** - the ``sides`` setting turns the ring into any regular polygon
-  (4 corners + 45deg rotation = diamond, 3 = triangle, 64 = round).
-* **dot**    - an optionally outlined filled dot.
-
-Every property (size, thickness, gap, colour, outline, opacity, rotation) is
-applied on the fly, so live customisation is instant and DPI independent.
-"""
-
 from __future__ import annotations
 
 import math
@@ -33,7 +17,6 @@ _CAP_STYLES = {
 
 
 def _half_extent(s: CrosshairSettings) -> float:
-    """Radius of the smallest circle that contains the (unrotated) crosshair."""
     outline = s.outline_thickness if s.outline else 0
     if s.style == "dot":
         return s.dot_size + outline + 2
@@ -50,13 +33,7 @@ def _pen(color: str, width: float, cap: str) -> QPen:
     return pen
 
 
-def _stroke(
-    painter: QPainter,
-    s: CrosshairSettings,
-    width: float,
-    draw: "callable",
-) -> None:
-    """Draw geometry with an optional dark outline around the stroke."""
+def _stroke(painter: QPainter, s: CrosshairSettings, width: float, draw: "callable") -> None:
     if s.outline:
         painter.setPen(_pen(s.outline_color, width + 2.0 * s.outline_thickness, s.cap))
         draw()
@@ -106,7 +83,6 @@ def _draw_dot(painter: QPainter, s: CrosshairSettings, radius: float, color: str
 
 
 def render_pixmap(s: CrosshairSettings, dpr: float = 1.0) -> QPixmap:
-    """Render the crosshair to a transparent pixmap scaled for the given DPI."""
     scale = max(dpr, 1.0)
     half = _half_extent(s) * scale
     side = max(int(math.ceil(2 * (half + 4))), 1)
@@ -138,7 +114,6 @@ def render_pixmap(s: CrosshairSettings, dpr: float = 1.0) -> QPixmap:
 
 
 def logical_size(s: CrosshairSettings, dpr: float = 1.0) -> tuple:
-    """Logical (user-visible) pixel size of the rendered crosshair."""
     scale = max(dpr, 1.0)
     half = _half_extent(s)
     side = max(int(math.ceil(2 * (half * scale + 4))), 1)
@@ -146,7 +121,6 @@ def logical_size(s: CrosshairSettings, dpr: float = 1.0) -> tuple:
 
 
 def render_icon(s: CrosshairSettings, size: int = 64) -> QPixmap:
-    """Small square icon used for the tray / application icon."""
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)

@@ -1,19 +1,3 @@
-"""Community crosshair sharing.
-
-Crosshairs are nothing but JSON blobs of :class:`CrosshairSettings`. This
-module:
-
-* pulls the community crosshair index from ``ufuayk/crossac-repo`` and
-  downloads every crosshair (cached locally so offline launches still work),
-* strictly validates any incoming crosshair - only known keys, typed and
-  range-clamped, colours verified; nothing is ever executed,
-* exports / imports crosshairs as ``.crossac.json`` files that users can
-  submit back to the community repo via pull request.
-
-The community repo is empty for now; a missing ``index.json`` simply reports
-the community as "empty" instead of failing.
-"""
-
 from __future__ import annotations
 
 import json
@@ -25,7 +9,7 @@ from typing import List, Optional
 
 from PySide6.QtCore import QStandardPaths, QThread, Signal
 
-from .config import ARMS_LETTERS, CAPS, CROSSHAIR_KEYS, CrosshairSettings
+from .config import ARMS_LETTERS, CAPS, CROSSHAIR_KEYS, INT_LIMITS, CrosshairSettings
 from .renderer import STYLES
 
 COMMUNITY_OWNER = "ufuayk"
@@ -37,22 +21,8 @@ INDEX_URL = f"{RAW_BASE}/index.json"
 FORMAT = "crossac"
 FORMAT_VERSION = 1
 
+_HTTP_TIMEOUT = 5.0
 _RE_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
-
-_INT_LIMITS = {
-    "sides": (3, 64),
-    "size": (2, 200),
-    "size_v": (2, 200),
-    "gap": (0, 100),
-    "gap_v": (0, 100),
-    "thickness": (1, 40),
-    "opacity": (10, 100),
-    "rotation": (0, 360),
-    "outline_thickness": (1, 20),
-    "dot_size": (1, 80),
-    "offset_x": (-400, 400),
-    "offset_y": (-400, 400),
-}
 
 
 @dataclass
@@ -63,9 +33,17 @@ class CommunityCrosshair:
     settings: CrosshairSettings
 
 
-# ------------------------------------------------------------------ validate
+def _as_bool(value, default=False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return default
+
+
 def validate_crosshair(data: dict) -> Optional[CrosshairSettings]:
-    """Turn a parsed JSON object into settings, or None if it is invalid."""
     if not isinstance(data, dict):
         return None
     settings = data.get("settings")
@@ -78,7 +56,7 @@ def validate_crosshair(data: dict) -> Optional[CrosshairSettings]:
                 continue
             value = settings[key]
             if key in ("outline", "center_dot"):
-                out.__dict__[key] = bool(value)
+                out.__dict__[key] = _as_bool(value)
             elif key in ("color", "outline_color", "dot_color"):
                 if isinstance(value, str) and _RE_COLOR.match(value):
                     out.__dict__[key] = value.upper()
@@ -101,17 +79,17 @@ def validate_crosshair(data: dict) -> Optional[CrosshairSettings]:
                     return None
             else:
                 try:
-                    out.__dict__[key] = int(value)
+                    ivalue = int(value)
                 except (TypeError, ValueError):
                     return None
-                low, high = _INT_LIMITS.get(key, (0, 10 ** 6))
-                out.__dict__[key] = max(low, min(high, out.__dict__[key]))
+                low, high = INT_LIMITS.get(key, (0, 10 ** 6))
+                out.__dict__[key] = max(low, min(high, ivalue))
         return out
     except Exception:
         return None
 
 
-def _sanitize_name(value: object, fallback: str, limit: int = 60) -> str:
+def _sanitize_name(value, fallback: str, limit: int = 60) -> str:
     if not isinstance(value, str):
         return fallback
     value = value.strip()
@@ -120,7 +98,6 @@ def _sanitize_name(value: object, fallback: str, limit: int = 60) -> str:
     return value[:limit]
 
 
-# ------------------------------------------------------------- export/import
 def serialize_settings(settings: CrosshairSettings, name: str, author: str = "") -> dict:
     payload = {key: getattr(settings, key) for key in CROSSHAIR_KEYS}
     return {
@@ -142,7 +119,6 @@ def export_settings(settings: CrosshairSettings, path: str, name: str, author: s
 
 
 def import_file(path: str) -> Optional[tuple]:
-    """Load a crosshair file. Returns ``(name, author, settings)`` or None."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -158,8 +134,7 @@ def import_file(path: str) -> Optional[tuple]:
     return name, author, settings
 
 
-# -------------------------------------------------------------- fetching
-def _http_get(url: str, timeout: float = 8.0) -> Optional[bytes]:
+def _http_get(url: str, timeout: float = _HTTP_TIMEOUT) -> Optional[bytes]:
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "crossac/2.0", "Accept": "application/json"},
@@ -210,11 +185,11 @@ def load_cached() -> List[CommunityCrosshair]:
     return items
 
 
-def _fetch_all() -> tuple:
-    """Fetch the community index + crosshairs. Returns ``(items, status, message)``."""
+def _fetch_all(should_stop=None) -> tuple:
     index = _download_json(INDEX_URL)
+    if should_stop and should_stop():
+        return [], "cancelled", ""
     if index is None:
-        # offline or not created yet - fall back to local cache
         cached = load_cached()
         if cached:
             return cached, "cached", "offline"
@@ -226,6 +201,8 @@ def _fetch_all() -> tuple:
 
     items: List[CommunityCrosshair] = []
     for entry in entries:
+        if should_stop and should_stop():
+            return [], "cancelled", ""
         if not isinstance(entry, dict):
             continue
         crosshair_id = _sanitize_name(entry.get("id"), "", 40)
@@ -236,6 +213,8 @@ def _fetch_all() -> tuple:
             continue
         url = f"{RAW_BASE}/{file_path}"
         data = _download_json(url)
+        if should_stop and should_stop():
+            return [], "cancelled", ""
         settings = validate_crosshair(data) if data else None
         if settings is None:
             continue
@@ -251,10 +230,9 @@ def _fetch_all() -> tuple:
 
 
 class CommunityWorker(QThread):
-    """Fetch the community library without blocking the UI thread."""
-
     done = Signal(object)
 
     def run(self) -> None:
-        items, status, message = _fetch_all()
-        self.done.emit({"items": items, "status": status, "message": message})
+        items, status, message = _fetch_all(should_stop=self.isInterruptionRequested)
+        if not self.isInterruptionRequested():
+            self.done.emit({"items": items, "status": status, "message": message})

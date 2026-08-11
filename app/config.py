@@ -1,17 +1,6 @@
-"""Persistent, cross-platform application settings built on QSettings.
-
-The ``CrosshairSettings`` dataclass holds every option the user can tweak.
-Changes are written to the platform-native settings store (Windows registry,
-macOS ``defaults`` / plist, Linux ``~/.config``) the moment they are applied,
-so the crosshair configuration survives restarts.
-
-A crosshair is defined purely by numbers and colours - this is what makes the
-community sharing format possible (see ``community.py``): any crosshair is a
-plain JSON blob of these fields.
-"""
-
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, asdict
 
 from PySide6.QtCore import QSettings, Signal, QObject
@@ -19,27 +8,26 @@ from PySide6.QtCore import QSettings, Signal, QObject
 ORG = "Crossac"
 APP = "Crossac"
 
-# machine-readable keys that fully describe a crosshair (used for export/import)
 CROSSHAIR_KEYS = (
     "style",
-    "sides",      # polygon corner count for the circle style (3..64)
-    "size",       # horizontal line length  (px)
-    "size_v",     # vertical line length    (px)
-    "gap",        # horizontal inner gap    (px)
-    "gap_v",      # vertical inner gap      (px)
-    "arms",       # which arms the cross draws: letters from "tlbr"
-    "thickness",  # stroke width            (px)
-    "cap",        # line cap: flat | round | square
+    "sides",
+    "size",
+    "size_v",
+    "gap",
+    "gap_v",
+    "arms",
+    "thickness",
+    "cap",
     "color",
-    "opacity",    # 10..100 %
-    "rotation",   # degrees
+    "opacity",
+    "rotation",
     "outline",
     "outline_color",
     "outline_thickness",
     "center_dot",
     "dot_size",
     "dot_color",
-    "offset_x",   # pixel nudge from dead center
+    "offset_x",
     "offset_y",
 )
 
@@ -49,18 +37,60 @@ BUILTIN_STYLES = ("cross", "circle", "dot")
 ARMS_LETTERS = ("t", "b", "l", "r")
 CAPS = ("flat", "round", "square")
 
+INT_LIMITS = {
+    "sides": (3, 64),
+    "size": (2, 200),
+    "size_v": (2, 200),
+    "gap": (0, 100),
+    "gap_v": (0, 100),
+    "thickness": (1, 40),
+    "opacity": (10, 100),
+    "rotation": (0, 360),
+    "outline_thickness": (1, 20),
+    "dot_size": (1, 80),
+    "offset_x": (-400, 400),
+    "offset_y": (-400, 400),
+    "monitor": (0, 100),
+}
+
+_HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _as_bool(value, default=False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return default
+
+
+def _as_int(value, low: int, high: int, default: int) -> int:
+    try:
+        ivalue = int(value)
+    except (TypeError, ValueError):
+        ivalue = default
+    return max(low, min(high, ivalue))
+
+
+def _as_color(value, default: str) -> str:
+    if isinstance(value, str) and _HEX_RE.match(value):
+        return value.upper()
+    return default
+
 
 @dataclass
 class CrosshairSettings:
-    style: str = "cross"                 # cross | circle | dot
-    sides: int = 64                      # polygon corners for "circle" (>=3 = polygon)
+    style: str = "cross"
+    sides: int = 64
     size: int = 26
     size_v: int = 26
     gap: int = 6
     gap_v: int = 6
-    arms: str = "tlbr"                   # subset of "tlbr": top,bottom,left,right
+    arms: str = "tlbr"
     thickness: int = 3
-    cap: str = "flat"                    # flat | round | square
+    cap: str = "flat"
     color: str = "#00FF00"
     opacity: int = 100
     rotation: int = 0
@@ -77,15 +107,13 @@ class CrosshairSettings:
     offset_y: int = 0
 
     monitor: int = 0
-    language: str = ""                   # empty == system language
+    language: str = ""
 
 
 DEFAULTS = CrosshairSettings()
 
 
 class SettingsStore(QObject):
-    """Bridges :class:`CrosshairSettings` and QSettings + change signals."""
-
     changed = Signal()
 
     def __init__(self):
@@ -94,22 +122,31 @@ class SettingsStore(QObject):
         self._q = QSettings(ORG, APP)
         self.load()
 
-    # ------------------------------------------------------------- load/save
     def load(self) -> None:
         q = self._q
         s = self._settings
         for key in CROSSHAIR_KEYS + NON_CROSSHAIR_KEYS:
-            if q.contains(key):
-                setattr(s, key, q.value(key))
-        # sanitise values that may have come from older versions / config files
-        if s.style not in BUILTIN_STYLES:
-            s.style = "cross"
-        if not isinstance(s.sides, int) or not (3 <= s.sides <= 64):
-            s.sides = 64
-        if not isinstance(s.arms, str) or not set(s.arms) or not set(s.arms) <= set(ARMS_LETTERS):
-            s.arms = "tlbr"
-        if not isinstance(s.cap, str) or s.cap not in CAPS:
-            s.cap = "flat"
+            if not q.contains(key):
+                continue
+            value = q.value(key)
+            if key in ("outline", "center_dot"):
+                setattr(s, key, _as_bool(value))
+            elif key in ("color", "outline_color", "dot_color"):
+                setattr(s, key, _as_color(value, getattr(s, key)))
+            elif key == "style":
+                if value in BUILTIN_STYLES:
+                    s.style = value
+            elif key == "arms":
+                if isinstance(value, str) and value and set(value) <= set(ARMS_LETTERS):
+                    s.arms = "".join(letter for letter in ARMS_LETTERS if letter in value)
+            elif key == "cap":
+                if value in CAPS:
+                    s.cap = value
+            elif key in INT_LIMITS:
+                low, high = INT_LIMITS[key]
+                setattr(s, key, _as_int(value, low, high, getattr(s, key)))
+            else:
+                setattr(s, key, value)
 
     def save(self) -> None:
         q = self._q
@@ -124,7 +161,6 @@ class SettingsStore(QObject):
         self._q.sync()
         self.changed.emit()
 
-    # ------------------------------------------------------------------ get
     @property
     def data(self) -> CrosshairSettings:
         return self._settings
@@ -132,7 +168,6 @@ class SettingsStore(QObject):
     def get(self) -> CrosshairSettings:
         return self._settings
 
-    # ------------------------------------------------------------------ set
     def set(self, **kwargs) -> None:
         for key, value in kwargs.items():
             if hasattr(self._settings, key):

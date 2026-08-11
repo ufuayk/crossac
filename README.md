@@ -11,6 +11,7 @@ customisable, always on top — even over fullscreen games.
 
 > **macOS / Windows:** the overlay is raised to the highest native window level
 > and marked click-through, so it floats above fullscreen (borderless) games.
+
 > **Linux:** relies on `_NET_WM_STATE_ABOVE` (X11). Wayland compositors usually
 > forbid unmanaged overlays, so results may vary there.
 
@@ -37,7 +38,7 @@ customisable, always on top — even over fullscreen games.
 - **Always on top + click-through** — guaranteed on Windows and macOS, works on
   X11.
 - **System tray** — quick access to settings and quit.
-- **i18n** — English, Türkçe, Español. Adding a language = drop one JSON file.
+- **i18n** — English, Türkçe, Español, Français. Adding a language = drop one JSON file.
 
 ## Requirements
 
