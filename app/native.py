@@ -45,7 +45,7 @@ def _apply_windows(hwnd: int) -> None:
                         SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
 
 
-_NS_SCREEN_SAVER_LEVEL = 1000
+_NS_CURSOR_LEVEL = 2000  # kCGCursorWindowLevel — above everything including fullscreen apps
 _NS_CAN_JOIN_ALL_SPACES = 1 << 0
 _NS_STATIONARY = 1 << 2
 _NS_IGNORES_CYCLE = 1 << 3
@@ -97,7 +97,7 @@ def _apply_macos(win_id: int) -> None:
     ns_window = _msg(view, "window")
     if not ns_window:
         return
-    _msg_i(ns_window, "setLevel:", _NS_SCREEN_SAVER_LEVEL)
+    _msg_i(ns_window, "setLevel:", _NS_CURSOR_LEVEL)
     behavior = _NS_CAN_JOIN_ALL_SPACES | _NS_STATIONARY | _NS_IGNORES_CYCLE | _NS_FULLSCREEN_AUXILIARY
     _msg_u(ns_window, "setCollectionBehavior:", behavior)
     _msg_b(ns_window, "setHidesOnDeactivate:", False)
@@ -155,7 +155,7 @@ def _apply_linux_x11(hwnd: int) -> None:
         x11.XSendEvent.restype = c_int
         x11.XSendEvent.argtypes = [c_void_p, c_ulong, c_int, c_ulong, c_void_p]
 
-        mask = c_ulong(1 << 19)  # SubstructureNotifyMask
+        mask = c_ulong((1 << 19) | (1 << 20))  # SubstructureNotifyMask | SubstructureRedirectMask
         x11.XSendEvent(dpy, root, False, mask, byref(event))
         x11.XFlush(dpy)
         x11.XCloseDisplay(dpy)

@@ -17,7 +17,7 @@ class OverlayWindow(QWidget):
         self._store = store
         self._pixmap: QPixmap = QPixmap()
         self._native_timer = QTimer(self)
-        self._native_timer.setInterval(1500)
+        self._native_timer.setInterval(500)  # 500ms — much more aggressive
         self._native_timer.timeout.connect(self._apply_native)
 
         flags = (
@@ -26,7 +26,7 @@ class OverlayWindow(QWidget):
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         if sys.platform == "darwin":
-            # NSPanel required for fullscreen space participation
+            # NSPanel required for fullscreen space participation on macOS
             flags |= Qt.WindowType.Tool
         else:
             flags |= Qt.WindowType.WindowStaysOnTopHint
